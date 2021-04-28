@@ -1,0 +1,64 @@
+dataset:
+  dir:
+    train:
+      - "/home/zbaum/Baum/interaction_mrus/fold01"
+      - "/home/zbaum/Baum/interaction_mrus/fold02"
+      - "/home/zbaum/Baum/interaction_mrus/fold03"
+      - "/home/zbaum/Baum/interaction_mrus/fold04"
+      - "/home/zbaum/Baum/interaction_mrus/fold05"
+      - "/home/zbaum/Baum/interaction_mrus/fold06"
+      - "/home/zbaum/Baum/interaction_mrus/fold07"
+      - "/home/zbaum/Baum/interaction_mrus/fold08"
+      - "/home/zbaum/Baum/interaction_mrus/fold09"
+      - "/home/zbaum/Baum/interaction_mrus/fold10"
+      - "/home/zbaum/Baum/interaction_mrus/fold11"
+    valid:
+      #- "/home/zbaum/Baum/interaction_mrus/fold00"
+      - "/home/zbaum/Baum/interaction_mrus/fold00-gland_label"
+    test:
+      - "/home/zbaum/Baum/interaction_mrus/fold00"
+
+  format: "h5"
+  type: "paired"
+  labeled: true
+  moving_image_shape: [120, 128, 128]
+  fixed_image_shape: [81, 118, 88]
+train:
+  # define neural network structure
+  method: "ddf" # the registration method, value should be ddf / dvf / conditional
+  backbone:
+    name: "local" # value should be local / global / unet
+    num_channel_initial: 32 # number of initial channel in local net, controls the size of the network
+    extract_levels: [0, 1, 2, 3]
+
+  # define the loss function for training
+  loss:
+    image:
+      name: "ssd"
+      weight: 0
+    label:
+      weight: 1.0
+      name: "dice"
+      scales: [0, 1, 2, 4, 8, 16, 32]
+    regularization:
+      weight: 1.0 # weight of regularization loss
+      name: "bending" # options include "bending", "gradient"
+
+  # define the optimizer
+  optimizer:
+    name: "adam" # value should be adam / sgd / rms
+    adam:
+      learning_rate: 1.0e-5
+
+  # define the hyper-parameters for preprocessing
+  preprocess:
+    data_augmentation:
+      name: "affine"
+    batch_size: 4
+    shuffle_buffer_num_batch: 1 # shuffle_buffer_size = batch_size * shuffle_buffer_num_batch
+
+  # other training hyper-parameters
+  epochs: 500000 # number of training epochs
+  save_period: 1000 # the model will be saved every `save_period` epochs.
+  k: 100
+  meta_lr: 1.0
