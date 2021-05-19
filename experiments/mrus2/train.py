@@ -116,14 +116,10 @@ def dice_simple(y_true, y_pred, eps=tf.keras.backend.epsilon()):
     dsc = -((numerator + eps) / (denominator + eps))
     return  tf.reduce_mean(dsc)
 
-def evaluate_val_data(dataset_train, dataset_metrics, iteration, plot=False):
+def evaluate_val_data(dataset_train, dataset_metrics, iteration, frames, plot=False, use_meta=True):
 
-    dice_scores_zero_shot = []
-    dice_scores_one_shot = []
-    #dice_scores_one_shot = [0]
-    tres_zero_shot = []
-    tres_one_shot = []
-    #tres_one_shot = [0]
+    dice_scores = [[] for _ in range(frames - 1)] if (frames > 0) else [[]]
+    tres = [[] for _ in range(frames - 1)] if (frames > 0) else [[]]
 
     for _, train_inputs in enumerate(dataset_train):
 
@@ -137,20 +133,22 @@ def evaluate_val_data(dataset_train, dataset_metrics, iteration, plot=False):
             fgr = tf.expand_dims(layer_util.get_reference_grid(sh), axis=0)
 
             # Get the 2-slice input for the zero-shot metrics and train-step
-            n_slices = 2
-            start = tf.shape(train_inputs["fixed_image"])[2] // 6
-            stop = 5 * tf.shape(train_inputs["fixed_image"])[2] // 6
-            slices = [np.random.choice(list(range(start, stop)), size=(n_slices), replace=False)]
-            #slices = None
-            zero_shot_inputs = mask_inputs(deepcopy(train_inputs), slices)
-            zero_shot_pred = model(zero_shot_inputs, training=False)
+            if frames > 0:
+                n_slices = 2
+                start = tf.shape(train_inputs["fixed_image"])[2] // 6
+                stop = 5 * tf.shape(train_inputs["fixed_image"])[2] // 6
+                slices = [np.random.choice(list(range(start, stop)), size=(n_slices), replace=False)]
+            else:
+                slices = None
+            eval_inputs = mask_inputs(deepcopy(train_inputs), slices)
+            eval_pred = model(eval_inputs, training=False)
             
             # Compute all zero-shot metrics
             for _, metrics_inputs in enumerate(dataset_metrics):
 
-                if zero_shot_inputs['indices'].numpy()[0][0] == metrics_inputs['indices'].numpy()[0][0]:
+                if eval_inputs['indices'].numpy()[0][0] == metrics_inputs['indices'].numpy()[0][0]:
 
-                    t_label = Warping(fixed_image_size=sh)([zero_shot_pred["ddf"], metrics_inputs["moving_label"]])
+                    t_label = Warping(fixed_image_size=sh)([eval_pred["ddf"], metrics_inputs["moving_label"]])
                     metrics = calculate_metrics(
                         fixed_image=metrics_inputs["fixed_image"],
                         fixed_label=metrics_inputs["fixed_label"],
@@ -161,78 +159,82 @@ def evaluate_val_data(dataset_train, dataset_metrics, iteration, plot=False):
                     )  
 
                     if metrics_inputs['indices'].numpy()[0][1] == 0:
-                        dice_scores_zero_shot.append(metrics["label_binary_dice"])
-                    tres_zero_shot.append(metrics["label_tre"])
-                    print(metrics)
+                        dice_scores[0].append(metrics["label_binary_dice"])
+                    tres[0].append(metrics["label_tre"])
 
                     if metrics_inputs["indices"].numpy()[0][0] <= 3 and plot:
                         plot_helper(
                             metrics_inputs["indices"].numpy(),
                             source=metrics_inputs["moving_image"].numpy(),
                             source_label=metrics_inputs["moving_label"].numpy(),
-                            transformed=zero_shot_pred["pred_fixed_image"].numpy(),
+                            transformed=eval_pred["pred_fixed_image"].numpy(),
                             transformed_label=t_label.numpy(),
-                            target=zero_shot_inputs["fixed_image"].numpy(),
-                            target_label=zero_shot_inputs["fixed_label"].numpy() if metrics_inputs["indices"].numpy()[0][1] == 0 else metrics_inputs["fixed_label"].numpy(),
+                            target=eval_inputs["fixed_image"].numpy(),
+                            target_label=eval_inputs["fixed_label"].numpy() if metrics_inputs["indices"].numpy()[0][1] == 0 else metrics_inputs["fixed_label"].numpy(),
                             target_full=full_fixed_im.numpy(),
                             target_label_full=full_fixed_lb.numpy(),
                             iteration=iteration,
                             shot=0,
                         )
-            #'''
-            # Do one-shot training
-            weights_before = model.get_weights()
-            train_step(zero_shot_inputs, full_fixed_lb)
-            #'''
-            #'''
-            # Get the 4-slice input (2 new slices)
-            while len(slices[0]) < 4:
-                s = np.random.choice(list(range(start, stop)), size=(1))
-                if not s in slices[0]:
-                    slices[0] = np.append(slices, s)
-            
-            one_shot_inputs = mask_inputs(deepcopy(train_inputs), slices)
-            one_shot_pred = model(one_shot_inputs, training=False)
-            
-            # Compute all one-shot metrics
-            for _, metrics_inputs in enumerate(dataset_metrics):
-                
-                if one_shot_inputs['indices'].numpy()[0][0] == metrics_inputs['indices'].numpy()[0][0]:
-                
-                    t_label = Warping(fixed_image_size=sh)([one_shot_pred["ddf"], metrics_inputs["moving_label"]])
-                    metrics = calculate_metrics(
-                        fixed_image=metrics_inputs["fixed_image"],
-                        fixed_label=metrics_inputs["fixed_label"],
-                        pred_fixed_image=None,
-                        pred_fixed_label=t_label,
-                        fixed_grid_ref=fgr,
-                        sample_index=0,
-                    )   
-                    if metrics_inputs['indices'].numpy()[0][1] == 0:
-                        dice_scores_one_shot.append(metrics["label_binary_dice"])
-                    tres_one_shot.append(metrics["label_tre"])
 
-                    if metrics_inputs["indices"].numpy()[0][0] <= 3 and plot:
-                        plot_helper(
-                            metrics_inputs["indices"].numpy(),
-                            source=metrics_inputs["moving_image"].numpy(),
-                            source_label=metrics_inputs["moving_label"].numpy(),
-                            transformed=one_shot_pred["pred_fixed_image"].numpy(),
-                            transformed_label=t_label,
-                            target=one_shot_inputs["fixed_image"].numpy(),
-                            target_label=one_shot_inputs["fixed_label"].numpy() if metrics_inputs["indices"].numpy()[0][1] == 0 else metrics_inputs["fixed_label"].numpy(),
-                            target_full=full_fixed_im.numpy(),
-                            target_label_full=full_fixed_lb.numpy(),
-                            iteration=iteration,
-                            shot=1,
-                        )
-            #'''
-            #'''
-            # Reset weights for next one-shot learning step
-            model.set_weights(weights_before)
-            #'''
+            if frames > 0:
 
-    return dice_scores_zero_shot, tres_zero_shot, dice_scores_one_shot, tres_one_shot
+                weights_before = model.get_weights()
+
+                for frame in range(3, frames + 1):
+
+                    if use_meta:
+                        # Do (n-1)-shot training step before getting new metrics
+                        train_step(eval_inputs, full_fixed_lb)
+
+                    # Get the n-slice input (1 new slice)
+                    while len(slices[0]) < frame:
+                        s = np.random.choice(list(range(start, stop)), size=(1))
+                        if not s in slices[0]:
+                            slices[0] = np.append(slices, s)
+                    
+                    eval_inputs = mask_inputs(deepcopy(train_inputs), slices)
+                    eval_pred = model(eval_inputs, training=False)
+                    
+                    # Compute all n-shot metrics
+                    for _, metrics_inputs in enumerate(dataset_metrics):
+                        
+                        if eval_inputs['indices'].numpy()[0][0] == metrics_inputs['indices'].numpy()[0][0]:
+                        
+                            t_label = Warping(fixed_image_size=sh)([eval_pred["ddf"], metrics_inputs["moving_label"]])
+                            metrics = calculate_metrics(
+                                fixed_image=metrics_inputs["fixed_image"],
+                                fixed_label=metrics_inputs["fixed_label"],
+                                pred_fixed_image=None,
+                                pred_fixed_label=t_label,
+                                fixed_grid_ref=fgr,
+                                sample_index=0,
+                            )   
+                            # Append to (frame-2) to align 2 frames as 0th index (3 frames as 1st, ..., 10 frames as 8th)
+                            if metrics_inputs['indices'].numpy()[0][1] == 0:
+                                dice_scores[frame - 2].append(metrics["label_binary_dice"])
+                            tres[frame - 2].append(metrics["label_tre"])
+
+                            if metrics_inputs["indices"].numpy()[0][0] <= 3 and plot:
+                                plot_helper(
+                                    metrics_inputs["indices"].numpy(),
+                                    source=metrics_inputs["moving_image"].numpy(),
+                                    source_label=metrics_inputs["moving_label"].numpy(),
+                                    transformed=eval_pred["pred_fixed_image"].numpy(),
+                                    transformed_label=t_label,
+                                    target=eval_inputs["fixed_image"].numpy(),
+                                    target_label=eval_inputs["fixed_label"].numpy() if metrics_inputs["indices"].numpy()[0][1] == 0 else metrics_inputs["fixed_label"].numpy(),
+                                    target_full=full_fixed_im.numpy(),
+                                    target_label_full=full_fixed_lb.numpy(),
+                                    iteration=iteration,
+                                    shot=(frame - 2),
+                                )
+
+                if use_meta:
+                    # Reset weights for next one-shot learning step
+                    model.set_weights(weights_before)
+
+    return dice_scores, tres
 
 def plot_helper(indices, source, source_label, transformed, transformed_label, target, target_label, target_full, target_label_full, iteration, shot):
 
@@ -281,7 +283,7 @@ def plot_helper(indices, source, source_label, transformed, transformed_label, t
     plt.savefig(os.path.join(log_dir, "iter-{:06}_{}-shot-output_sample-{}-lm-{}.png".format(iteration, shot, int(indices[0][0]), int(indices[0][1]))))
     plt.close()
 
-gpu="0"
+gpu="3"
 gpu_allow_growth=True
 os.environ["CUDA_VISIBLE_DEVICES"] = gpu
 os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true" if gpu_allow_growth else "false"
@@ -290,7 +292,7 @@ matplotlib.rcParams['agg.path.chunksize'] = 10000
 config_path="fold00.yaml"
 ckpt_path=""#"/raid/candi/zbaum/logs/.../save/ckpt-2100"
 log_dir="/raid/candi/zbaum/logs"
-exp_name="3d-2d-a1g1-k100"
+exp_name="3d-2d-a1g1-10shot"
 registry=REGISTRY
 
 # load config
@@ -376,6 +378,8 @@ total_steps = config["train"]["epochs"]
 save_period = config["train"]["save_period"]
 inner_steps_per_meta_step = config["train"]["k"]
 meta_step_lr = config["train"]["meta_lr"]
+frames = config["train"]["frames"]
+use_meta = config["train"]["use_meta"]
 gamma = config["train"]["loss"]["label"]["weight"] # label loss weight
 alpha = config["train"]["loss"]["regularization"]["weight"] # regularizer loss weight
 
@@ -383,8 +387,10 @@ print("###################################")
 print("LOG: ", log_dir)
 print("GPU: ", gpu)
 print("ITERATIONS:", total_steps)
-print("META-STEP SIZE: ", inner_steps_per_meta_step)
-print("INITIAL META LR: ", meta_step_lr)
+print("MAX FRAMES:", frames)
+if use_meta:
+    print("META-STEP SIZE: ", inner_steps_per_meta_step)
+    print("INITIAL META LR: ", meta_step_lr)
 print("OPT: ", config["train"]["optimizer"])
 print("LABEL LOSS WEIGHT:", gamma)
 print("DDF LOSS WEIGHT:", alpha)
@@ -393,7 +399,8 @@ print()
 
 evaluation = False
 if evaluation:
-    dice_scores_zero_shot, tres_zero_shot, dice_scores_one_shot, tres_one_shot = evaluate_val_data(dataset_val, dataset_test, 0, True)
+    dice_scores, tres = evaluate_val_data(dataset_val, dataset_test, 0, True)
+    '''
     print(
         "Evaluation:\nZero-Shot -- Dice: {:.3f} | Avg. TRE: {:.3f} | Med. TRE: {:.3f}\nOne-Shot --- Dice: {:.3f} | Avg. TRE: {:.3f} | Med. TRE: {:.3f}\n".format(
                                                                                                                 np.mean(dice_scores_zero_shot), 
@@ -403,7 +410,8 @@ if evaluation:
                                                                                                                 np.mean(tres_one_shot),
                                                                                                                 np.median(tres_one_shot),
                                                                                                             )
-    )      
+    )  
+    '''    
 
 iters = []
 dice_loss = []
@@ -412,9 +420,9 @@ be_loss = []
 be_loss_temp = []
 
 evals = []
-dice_scores = [[], []]
-mean_tres = [[], []]
-median_tres = [[], []]
+mean_dice = [[] for _ in range(frames - 1)] if (frames > 0) else [[]]
+mean_tres = [[] for _ in range(frames - 1)] if (frames > 0) else [[]]
+median_tres = [[] for _ in range(frames - 1)] if (frames > 0) else [[]]
 
 # Temporarily save the weights from the model.
 weights_before = model.get_weights()
@@ -430,13 +438,16 @@ for iteration in range(start_step, total_steps):
 
     # Remove the data from all but the selected slices, preserve full mask if not gland labels.
     # TODO: Should this be randomly selected for each set of training steps? Or always be random... i.e. one Reptile update PER task instead of mixing altogether...?
-    slices = []
-    for b in range(batch_size):
-        n_slices = np.random.choice([2, 4])
-        start = tf.shape(train_input["fixed_image"])[2] // 6
-        stop = 5 * tf.shape(train_input["fixed_image"])[2] // 6
-        slices.append(np.random.choice(list(range(start, stop)), size=(n_slices), replace=False))
-    #slices = None
+    if frames > 0:
+        slices = []
+        for b in range(batch_size):
+            n_slices = np.random.choice(list(range(2, frames + 1)))
+            start = tf.shape(train_input["fixed_image"])[2] // 6
+            stop = 5 * tf.shape(train_input["fixed_image"])[2] // 6
+            slices.append(np.random.choice(list(range(start, stop)), size=(n_slices), replace=False))
+    else:   
+        slices = None
+    
     train_input = mask_inputs(deepcopy(train_input), slices)
     loss, label_loss, regularizer_loss = train_step(train_input, fixed_lb)
 
@@ -452,44 +463,43 @@ for iteration in range(start_step, total_steps):
 
     if iteration >= 0 and (iteration + 1) % inner_steps_per_meta_step == 0:
 
-        #'''
-        # Linear scheduler for reptile meta-SGD step.
-        frac_done = iteration / total_steps
-        cur_meta_step_lr = (1 - frac_done) * meta_step_lr
-        print("Iteration: Meta-Update | Meta LR: {:.5f}".format(cur_meta_step_lr))
-        
-        # Get the non-interactively trained weights so far.
-        weights_after = model.get_weights()
+        if use_meta:
+            # Linear scheduler for reptile meta-SGD step.
+            frac_done = iteration / total_steps
+            cur_meta_step_lr = (1 - frac_done) * meta_step_lr
+            print("Iteration: Meta-Update | Meta LR: {:.5f}".format(cur_meta_step_lr))
+            
+            # Get the non-interactively trained weights so far.
+            weights_after = model.get_weights()
 
-        # Perform SGD for the meta-step, load the newly-trained weights into the model.
-        model.set_weights([weights_before[i] + (weights_after[i] - weights_before[i]) * cur_meta_step_lr for i in range(len(model.weights))])
+            # Perform SGD for the meta-step, load the newly-trained weights into the model.
+            model.set_weights([weights_before[i] + (weights_after[i] - weights_before[i]) * cur_meta_step_lr for i in range(len(model.weights))])
 
-        # Temporarily save the weights from the model (so we can restore after meta-testing).
-        weights_before = model.get_weights()
-        #'''
+            # Temporarily save the weights from the model (so we can restore after meta-testing).
+            weights_before = model.get_weights()
+
         if (iteration + 1) % save_period == 0:
 
-            dice_scores_zero_shot, tres_zero_shot, dice_scores_one_shot, tres_one_shot = evaluate_val_data(dataset_val, dataset_test, iteration + 1, True)
-            dice_scores[0].append(np.mean(dice_scores_zero_shot))
-            dice_scores[1].append(np.mean(dice_scores_one_shot))
-            mean_tres[0].append(np.mean(tres_zero_shot))
-            mean_tres[1].append(np.mean(tres_one_shot))
-            median_tres[0].append(np.median(tres_zero_shot))
-            median_tres[1].append(np.median(tres_one_shot))
-            print(
-                "\nEvaluation:\nZero-Shot -- Dice: {:.3f} | Avg. TRE: {:.3f} | Med. TRE: {:.3f}\nOne-Shot --- Dice: {:.3f} | Avg. TRE: {:.3f} | Med. TRE: {:.3f}\n".format(
-                                                                                                                        np.mean(dice_scores_zero_shot), 
-                                                                                                                        np.mean(tres_zero_shot), 
-                                                                                                                        np.median(tres_zero_shot), 
-                                                                                                                        np.mean(dice_scores_one_shot), 
-                                                                                                                        np.mean(tres_one_shot),
-                                                                                                                        np.median(tres_one_shot),
-                                                                                                                    )
-            )
-            #'''
-            # Reset weights, continue non-interaction training.
-            model.set_weights(weights_before)
-            #'''
+            dice_scores, tres = evaluate_val_data(dataset_val, dataset_test, iteration + 1, frames, plot=True, use_meta=use_meta)
+            assert len(dice_scores) == len(tres)
+            print("\nEvaluation:")
+            for shot in range(len(dice_scores)):
+                mean_dice[shot].append(np.mean(dice_scores[shot]))
+                mean_tres[shot].append(np.mean(tres[shot]))
+                median_tres[shot].append(np.median(tres[shot]))
+                print("{}-Shot -- Dice: {:.3f} | Avg. TRE: {:.3f} | Med. TRE: {:.3f}".format(
+                                                                                               shot,
+                                                                                               mean_dice[shot][-1], 
+                                                                                               mean_tres[shot][-1], 
+                                                                                               median_tres[shot][-1], 
+                                                                                              )
+                )
+            print()
+            
+            if use_meta:
+                # Reset weights, continue non-interaction training.
+                model.set_weights(weights_before)
+
             # Record training iteration losses.
             iters.append(iteration + 1)
             dice_loss.append(np.mean(dice_loss_temp))
@@ -506,18 +516,17 @@ for iteration in range(start_step, total_steps):
             plt.close()
 
             f, ax = plt.subplots(1, 1)
-            ax.plot(iters, dice_scores[0], label="Zero-Shot Dice")        
-            ax.plot(iters, dice_scores[1], label="One-Shot Dice")             
+            for shot in range(len(dice_scores)):
+                ax.plot(iters, mean_dice[shot], label="{}-Shot Dice".format(shot))        
             ax.legend(loc='lower right')     
             plt.show()
             plt.savefig(os.path.join(log_dir, 'live_dice.png'), dpi=1000)
             plt.close()
 
             f, ax = plt.subplots(1, 1)
-            ax.plot(iters, mean_tres[0], label="Mean Zero-Shot TRE") 
-            ax.plot(iters, mean_tres[1], label="Mean One-Shot TRE") 
-            ax.plot(iters, median_tres[0], label="Median Zero-Shot TRE") 
-            ax.plot(iters, median_tres[1], label="Median One-Shot TRE") 
+            for shot in range(len(dice_scores)):
+                ax.plot(iters, mean_tres[shot], label="Mean {}-Shot TRE".format(shot)) 
+                ax.plot(iters, median_tres[shot], label="Median {}-Shot TRE".format(shot)) 
             ax.legend(loc='upper right')     
             plt.show()
             plt.savefig(os.path.join(log_dir, 'live_tre.png'), dpi=1000)
