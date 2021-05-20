@@ -7,6 +7,7 @@ from copy import deepcopy
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
+from matplotlib.font_manager import FontProperties
 from mpl_toolkits.mplot3d import Axes3D
 
 import deepreg.model.optimizer as opt
@@ -16,6 +17,8 @@ from deepreg.registry import REGISTRY, Registry
 from deepreg.train import build_config
 from deepreg.util import build_dataset, build_log_dir, calculate_metrics
 from deepreg.callback import build_checkpoint_callback
+from deepreg.dataset.loader.util import normalize_array
+
 
 @tf.function
 def train_step(train_input, fixed_lb):
@@ -292,7 +295,7 @@ matplotlib.rcParams['agg.path.chunksize'] = 10000
 config_path="fold00.yaml"
 ckpt_path=""#"/raid/candi/zbaum/logs/.../save/ckpt-2100"
 log_dir="/raid/candi/zbaum/logs"
-exp_name="3d-2d-a1g1-10shot"
+exp_name="3d-2d-a1g1-k100-mlr0.5-10frame"
 registry=REGISTRY
 
 # load config
@@ -424,20 +427,65 @@ mean_dice = [[] for _ in range(frames - 1)] if (frames > 0) else [[]]
 mean_tres = [[] for _ in range(frames - 1)] if (frames > 0) else [[]]
 median_tres = [[] for _ in range(frames - 1)] if (frames > 0) else [[]]
 
+# If we're not using built-in datasets, create the data_aug func to apply later.
+if use_meta:
+    da_fn = registry.build_data_augmentation(
+        config=config["train"]["preprocess"]["data_augmentation"],
+        default_args={
+            "moving_image_size": data_loader_train.moving_image_shape,
+            "fixed_image_size": data_loader_train.fixed_image_shape,
+            "batch_size": batch_size,
+        },
+    )
+
+# Otherwise, grab the built-in dataset iterator
+if not use_meta: train_iterator = iter(dataset_train)
+
 # Temporarily save the weights from the model.
 weights_before = model.get_weights()
 
-train_iterator = iter(dataset_train)
-
 for iteration in range(start_step, total_steps):
     
-    train_input = next(train_iterator)
+    if use_meta:
+        if iteration % inner_steps_per_meta_step == 0:
+            idx = random.randrange(data_loader_train.num_samples)
+            # Get images
+            moving_image = data_loader_train.loader_moving_image.get_data(index=idx)
+            fixed_image = data_loader_train.loader_fixed_image.get_data(index=idx)
+            # Normalize, add batch dim
+            moving_image_tensor = tf.expand_dims(normalize_array(moving_image), axis=0)
+            fixed_image_tensor = tf.expand_dims(normalize_array(fixed_image), axis=0)
+            # Repeat up to batch size
+            moving_image_tensor_batched = tf.repeat(moving_image_tensor, repeats=batch_size, axis=0)
+            fixed_image_tensor_batched = tf.repeat(fixed_image_tensor, repeats=batch_size, axis=0)
+            
+            # Get labels
+            moving_label = data_loader_train.loader_moving_label.get_data(index=idx)
+            fixed_label = data_loader_train.loader_fixed_label.get_data(index=idx)
+        
+        # Pick label indices
+        lab_idxs = np.random.choice(moving_label.shape[-1], batch_size)
+        # Add batch dim, repeat up to batch size based on randomly selected labels
+        moving_label_tensor_batched = tf.concat([tf.expand_dims(moving_label[:, :, :, lab_idx], axis=0) for lab_idx in lab_idxs], axis=0)
+        fixed_label_tensor_batched = tf.concat([tf.expand_dims(fixed_label[:, :, :, lab_idx], axis=0) for lab_idx in lab_idxs], axis=0)
+        # Create label indices
+        indices_tensor = tf.constant([[idx, lab_idx] for lab_idx in lab_idxs], dtype=tf.float32)
+
+        train_input = {
+            "moving_image": moving_image_tensor_batched,
+            "fixed_image": fixed_image_tensor_batched,
+            "moving_label": moving_label_tensor_batched,
+            "fixed_label": fixed_label_tensor_batched,
+            "indices": indices_tensor,
+        }
+        train_input = da_fn(train_input)
+
+    if not use_meta: train_input = next(train_iterator)
 
     # Get the full label before removing data.
     fixed_lb = train_input["fixed_label"]
 
     # Remove the data from all but the selected slices, preserve full mask if not gland labels.
-    # TODO: Should this be randomly selected for each set of training steps? Or always be random... i.e. one Reptile update PER task instead of mixing altogether...?
     if frames > 0:
         slices = []
         for b in range(batch_size):
@@ -488,11 +536,11 @@ for iteration in range(start_step, total_steps):
                 mean_tres[shot].append(np.mean(tres[shot]))
                 median_tres[shot].append(np.median(tres[shot]))
                 print("{}-Shot -- Dice: {:.3f} | Avg. TRE: {:.3f} | Med. TRE: {:.3f}".format(
-                                                                                               shot,
-                                                                                               mean_dice[shot][-1], 
-                                                                                               mean_tres[shot][-1], 
-                                                                                               median_tres[shot][-1], 
-                                                                                              )
+                                                                                             shot,
+                                                                                             mean_dice[shot][-1], 
+                                                                                             mean_tres[shot][-1], 
+                                                                                             median_tres[shot][-1], 
+                                                                                            )
                 )
             print()
             
