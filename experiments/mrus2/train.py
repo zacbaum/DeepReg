@@ -555,10 +555,15 @@ for iteration in range(start_step, total_steps):
             dice_loss_temp = []
             be_loss_temp = []
 
+            fontP = FontProperties()
+            fontP.set_size('small')
+
             f, ax = plt.subplots(1, 1)
             ax.plot(iters, dice_loss, label="Dice Loss")        
-            ax.plot(iters, be_loss, label="Bending Energy")        
-            ax.legend(loc='upper right')     
+            ax.plot(iters, be_loss, label="Bending Energy")
+            box = ax.get_position()
+            ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])        
+            ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), prop=fontP)     
             plt.show()
             plt.savefig(os.path.join(log_dir, 'live_loss.png'), dpi=1000)
             plt.close()
@@ -566,7 +571,9 @@ for iteration in range(start_step, total_steps):
             f, ax = plt.subplots(1, 1)
             for shot in range(len(dice_scores)):
                 ax.plot(iters, mean_dice[shot], label="{}-Shot Dice".format(shot))        
-            ax.legend(loc='lower right')     
+            box = ax.get_position()
+            ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])        
+            ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), prop=fontP)     
             plt.show()
             plt.savefig(os.path.join(log_dir, 'live_dice.png'), dpi=1000)
             plt.close()
@@ -575,7 +582,9 @@ for iteration in range(start_step, total_steps):
             for shot in range(len(dice_scores)):
                 ax.plot(iters, mean_tres[shot], label="Mean {}-Shot TRE".format(shot)) 
                 ax.plot(iters, median_tres[shot], label="Median {}-Shot TRE".format(shot)) 
-            ax.legend(loc='upper right')     
+            box = ax.get_position()
+            ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])        
+            ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), prop=fontP)     
             plt.show()
             plt.savefig(os.path.join(log_dir, 'live_tre.png'), dpi=1000)
             plt.close()
